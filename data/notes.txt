@@ -1,0 +1,3 @@
+rent 1200
+groceries 340
+phone 55
