@@ -44,5 +44,5 @@ def degrade(question, evidence):
         return "I ran out of search steps and found nothing relevant."
     prompt = (f"Passages:\n{_passages(evidence)}\n\nQuestion: {question}\n"
               "I ran out of search steps. Give the best partial answer using only these "
-              "passages, cite sources like [react p.3], and state what is still missing.")
+              "passages, cite sources like [react p.3], keep it under 120 words with no headings, and state in one sentence what is still missing.")
     return _ask(prompt).text

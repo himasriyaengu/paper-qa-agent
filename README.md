@@ -1,8 +1,19 @@
 # Paper Q&A Agent
 
-A small question-answering agent over four ML papers (Attention Is All You Need, ReAct, Retrieval-Augmented Generation, Reflexion). The agent loop is written by hand against the Gemini API, with no agent framework, so every step is visible and logged.
+A question-answering agent over four ML papers (Attention Is All You Need, ReAct, Retrieval-Augmented Generation, Reflexion). The agent loop is written by hand against the Gemini API, with no agent framework, so every step is visible and logged.
 
-It answers only from retrieved passages, cites sources as `[doc p.N]`, checks in code that every citation was actually retrieved, and refuses when the documents do not contain the answer.
+It answers only from retrieved passages, cites sources as `[doc p.N]`, checks in code that every citation was actually retrieved, flags or refuses when retrieval looks weak, reviews its own draft against the passages, and returns a best-effort partial answer if it runs out of steps.
+
+## How a question is handled
+
+1. The model calls a `search_docs` tool (up to 6 steps).
+2. Retrieval uses dense embeddings. The top score sets a confidence level:
+   - below 0.70: `none`. No passages are returned, so the model cannot answer from them.
+   - 0.70 to 0.74: `low`. BM25 results are added as a fallback and the answer is flagged as uncertain.
+   - above 0.74: `high`.
+3. The draft answer is checked against the retrieved passages by a second model call. Unsupported claims trigger one rewrite.
+4. Every `[doc p.N]` citation is verified to have been in the retrieved results.
+5. If the step limit is hit, the agent writes a short partial answer from what it found and states what is missing.
 
 ## What is in the repo
 
@@ -13,11 +24,14 @@ It answers only from retrieved passages, cites sources as `[doc p.N]`, checks in
 | `ingest.py` | Splits PDF pages into overlapping 180-word chunks (`chunks.json`). |
 | `search.py` | BM25 keyword retrieval with stopword filtering. |
 | `embed.py`, `dense.py` | Embedding retrieval (`gemini-embedding-001`), vectors cached to disk. |
-| `hybrid.py` | BM25 + dense merged with reciprocal rank fusion. |
-| `rag.py` | The RAG agent: search tool, grounded answers, citation check. Uses dense retrieval. |
+| `hybrid.py` | BM25 + dense merged with reciprocal rank fusion (evaluated, not used by the agent). |
+| `guard.py` | Confidence thresholds and BM25 fallback. |
+| `critique.py` | Self-critique of drafts and graceful degradation. |
+| `rag.py` | The RAG agent that ties these together. |
 | `citations.py` | Parses citations, including shorthand like `[reflexion p.4, 6]`. |
 | `ret_eval.py`, `ret_eval_hard.py`, `report.py` | Retrieval evaluation and comparison report. |
-| `test_structured.py` | Unit tests (`python -m pytest -q`). |
+| `calib.py` | Measures dense scores for in-scope vs out-of-scope questions (used to pick thresholds). |
+| `test_structured.py`, `test_pipeline.py` | Unit tests (`python -m pytest -q`). |
 
 ## Retrieval results
 
@@ -34,15 +48,19 @@ Findings:
 - Dense retrieval ranked the right chunk higher than BM25 on both sets, so the agent uses it.
 - Hybrid fusion helped on the easy set and hurt on the hard set. A likely cause is that BM25 returns mostly noise for paraphrased queries and rank fusion lets that noise outvote a good dense result. I did not verify this by inspecting individual queries.
 - BM25 returned junk pages (repeated attention-visualization text) until stopwords were removed. Stopword filtering took the easy set from 11/12 to 12/12.
+- Dense top-1 scores separated in-scope from out-of-scope questions only narrowly: the highest out-of-scope score was 0.721 and the lowest in-scope score was 0.725 (28 questions). That is why the agent uses a middle "low confidence" band instead of one cutoff.
 
 ## Limitations
 
 - The evaluation is small (12 easy and 8 hard questions) and written by me, so differences of one or two questions are within noise. This is a small experiment, not a benchmark.
 - The stopword list was adjusted while looking at the easy set, so the easy set is not an independent test of that change.
 - The relevance label is a keyword match, which can mark a chunk wrong when it describes the answer in different words.
+- The confidence thresholds (0.70 and 0.74) come from 28 questions with a 0.004 margin, and may not hold on a different document set or new questions.
 - The citation check confirms that a cited page was among the retrieved results. It does not confirm that the page supports the claim.
-- Refusal behavior was checked on one out-of-scope question, not a test set.
-- Dense search always returns something, so refusing relies on the model noticing that the passages do not answer the question.
+- The self-critique uses the same model that wrote the answer, so it can share the same blind spots. It was tested on one planted error (a false optimizer claim), not on a test set.
+- Degraded (step-limit) answers are not passed through the critique.
+- The "fallback" for low-confidence retrieval is a second retriever (BM25), not a web search.
+- Refusal behavior was checked on a handful of out-of-scope questions, not a test set.
 
 ## Setup
 
@@ -54,7 +72,7 @@ bash get_docs.sh                    # downloads the four PDFs from arXiv
 python ingest.py                    # build chunks.json
 python embed.py                     # embed chunks once, saves chunk_vecs.npy
 python rag.py                       # ask questions
-python report.py                    # reproduce the results table
+python report.py                    # reproduce the retrieval table
 python -m pytest -q
 ```
 
@@ -62,7 +80,7 @@ Models used: `gemini-3.5-flash-lite` (set `AGENT_MODEL` to override) and `gemini
 
 ## Possible next steps
 
-- Larger, independently written evaluation set with page-level relevance labels.
+- Larger, independently written evaluation set with page-level relevance labels, including a held-out set for the thresholds.
 - Test whether weighting dense results higher in fusion fixes the hybrid regression, using questions not used for tuning.
-- Check that each cited passage supports the claim it is attached to, for example with a second model call.
-- Measure refusal rate on a set of out-of-scope questions.
+- Run the critique on degraded answers and measure how often it changes an answer.
+- Per-question latency and token tracking.
