@@ -1,4 +1,4 @@
-import logging
+import logging, time
 from pydantic import BaseModel, Field
 from google.genai import types
 from agent import client, MODEL
@@ -17,7 +17,15 @@ def _ask(prompt, schema=None):
     if schema:
         cfg = types.GenerateContentConfig(
             response_mime_type="application/json", response_schema=schema)
-    return client.models.generate_content(model=MODEL, contents=prompt, config=cfg)
+    for attempt in range(3):
+        try:
+            return client.models.generate_content(model=MODEL, contents=prompt, config=cfg)
+        except Exception as e:
+            log.info(f"[critique] call failed ({type(e).__name__}), attempt {attempt + 1}")
+            if attempt == 2:
+                raise
+            time.sleep(10 * (attempt + 1))
+
 
 def review(question, answer, evidence, confidence):
     if confidence == "none" or not evidence:
@@ -28,7 +36,7 @@ def review(question, answer, evidence, confidence):
     try:
         c = Critique.model_validate_json(_ask(prompt, Critique).text)
     except Exception as e:
-        log.info(f"[critique] failed: {type(e).__name__}")
+        log.info(f"[critique] failed: {type(e).__name__}: {str(e)[:150]}")
         return answer, {"critique": "error"}
     log.info(f"[critique] supported={c.supported} unsupported={c.unsupported_claims}")
     if c.supported or not c.unsupported_claims:
