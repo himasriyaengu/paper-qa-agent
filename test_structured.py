@@ -13,3 +13,7 @@ def test_confidence_out_of_range_rejected():
 def test_missing_field_rejected():
     with pytest.raises(ValidationError):
         Answer.model_validate_json('{"answer":"x","confidence":0.5}')
+
+def test_citation_shorthand():
+    from citations import parse_cites
+    assert parse_cites("[reflexion p.4, 6]") == {"reflexion p.4", "reflexion p.6"}

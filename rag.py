@@ -43,7 +43,7 @@ def rag_run(question: str):
     return "Stopped: reached the step limit.", seen
 
 def check_citations(text: str, seen: set):
-    cited = {f"{d} p.{p}" for d, p in re.findall(r"\b([a-z]+) p\.(\d+)", text.lower())}
+    from citations import parse_cites; cited = parse_cites(text)
     return cited, sorted(c for c in cited if c not in seen)
 
 if __name__ == "__main__":
