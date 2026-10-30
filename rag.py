@@ -1,7 +1,7 @@
 import logging, re
 from google.genai import types
 from agent import client, MODEL, MAX_STEPS
-from search import search_docs
+from dense import search_dense as search_docs
 
 log = logging.getLogger("agent")
 
