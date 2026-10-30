@@ -4,3 +4,4 @@
 __pycache__/
 docs/
 chunks.json
+chunk_vecs.npy
