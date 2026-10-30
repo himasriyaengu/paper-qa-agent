@@ -2,7 +2,7 @@
 
 A question-answering agent over four ML papers (Attention Is All You Need, ReAct, Retrieval-Augmented Generation, Reflexion). The agent loop is written by hand against the Gemini API, with no agent framework, so every step is visible and logged.
 
-It answers only from retrieved passages, cites sources as `[doc p.N]`, checks in code that every citation was actually retrieved, flags or refuses when retrieval looks weak, reviews its own draft against the passages, and returns a best-effort partial answer if it runs out of steps.
+It answers only from retrieved passages, cites sources as `[doc p.N]`, checks in code that every citation was actually retrieved, flags or refuses when retrieval looks weak, reviews its own draft against the passages, and returns a best-effort partial answer if it runs out of steps. Each question's latency, call count, and token usage are recorded.
 
 ## How a question is handled
 
@@ -11,7 +11,7 @@ It answers only from retrieved passages, cites sources as `[doc p.N]`, checks in
    - below 0.70: `none`. No passages are returned, so the model cannot answer from them.
    - 0.70 to 0.74: `low`. BM25 results are added as a fallback and the answer is flagged as uncertain.
    - above 0.74: `high`.
-3. The draft answer is checked against the retrieved passages by a second model call. Unsupported claims trigger one rewrite.
+3. The draft answer is checked against the retrieved passages by a second model call. Unsupported claims trigger one rewrite. API calls in this step are retried up to 3 times.
 4. Every `[doc p.N]` citation is verified to have been in the retrieved results.
 5. If the step limit is hit, the agent writes a short partial answer from what it found and states what is missing.
 
@@ -31,6 +31,7 @@ It answers only from retrieved passages, cites sources as `[doc p.N]`, checks in
 | `citations.py` | Parses citations, including shorthand like `[reflexion p.4, 6]`. |
 | `ret_eval.py`, `ret_eval_hard.py`, `report.py` | Retrieval evaluation and comparison report. |
 | `calib.py` | Measures dense scores for in-scope vs out-of-scope questions (used to pick thresholds). |
+| `metrics.py`, `run_batch.py`, `metrics_report.py` | Per-question latency and token tracking, a 28-question batch run, and a summary. |
 | `test_structured.py`, `test_pipeline.py` | Unit tests (`python -m pytest -q`). |
 
 ## Retrieval results
@@ -50,6 +51,29 @@ Findings:
 - BM25 returned junk pages (repeated attention-visualization text) until stopwords were removed. Stopword filtering took the easy set from 11/12 to 12/12.
 - Dense top-1 scores separated in-scope from out-of-scope questions only narrowly: the highest out-of-scope score was 0.721 and the lowest in-scope score was 0.725 (28 questions). That is why the agent uses a middle "low confidence" band instead of one cutoff.
 
+## Latency and token usage
+
+One batch run of 28 questions (20 in-scope, 8 off-topic) on the Gemini free tier with `gemini-3.5-flash-lite`:
+
+| Metric | Result |
+|---|---|
+| Latency per question | p50 5.8 s, p95 17.6 s, max 30.0 s |
+| Time spent in LLM calls / embedding calls | 95% / 4% |
+| LLM calls per question | 3.1 on average |
+| Searches per question | 1.4 on average |
+| Tokens per question | about 3,300 input, 100 output |
+| Retrieval confidence | 16 high, 5 low, 7 none |
+| Draft review | 18 passed, 7 skipped (refusals), 3 failed to run |
+
+Notes on this run:
+
+- Off-topic questions cost 2 LLM calls and no critique, so refusals are cheaper than answers.
+- The first dozen questions took 10 to 30 seconds and later ones 1 to 6 seconds, even for similar questions. That looks like free-tier API variability, so the latency numbers should not be read as a property of the agent.
+- Two requests hit the free-tier rate limit and were retried by the runner.
+- Three draft reviews failed to run and the unreviewed answer was returned. Re-running those questions passed, so the failures were transient. Review calls now retry up to 3 times. This run predates that change.
+- The critique never flagged an unsupported claim on the 18 reviews that ran. That could mean the answers were well grounded or that the critic is lenient. Its only check against a known error is one planted false claim.
+- No dollar cost is reported. The free tier charges nothing, and token counts are the portable number.
+
 ## Limitations
 
 - The evaluation is small (12 easy and 8 hard questions) and written by me, so differences of one or two questions are within noise. This is a small experiment, not a benchmark.
@@ -57,10 +81,11 @@ Findings:
 - The relevance label is a keyword match, which can mark a chunk wrong when it describes the answer in different words.
 - The confidence thresholds (0.70 and 0.74) come from 28 questions with a 0.004 margin, and may not hold on a different document set or new questions.
 - The citation check confirms that a cited page was among the retrieved results. It does not confirm that the page supports the claim.
-- The self-critique uses the same model that wrote the answer, so it can share the same blind spots. It was tested on one planted error (a false optimizer claim), not on a test set.
+- The self-critique uses the same model that wrote the answer, so it can share the same blind spots.
 - Degraded (step-limit) answers are not passed through the critique.
 - The "fallback" for low-confidence retrieval is a second retriever (BM25), not a web search.
 - Refusal behavior was checked on a handful of out-of-scope questions, not a test set.
+- Latency and token numbers come from a single batch run.
 
 ## Setup
 
@@ -73,6 +98,7 @@ python ingest.py                    # build chunks.json
 python embed.py                     # embed chunks once, saves chunk_vecs.npy
 python rag.py                       # ask questions
 python report.py                    # reproduce the retrieval table
+python run_batch.py && python metrics_report.py   # latency and token summary
 python -m pytest -q
 ```
 
@@ -83,4 +109,4 @@ Models used: `gemini-3.5-flash-lite` (set `AGENT_MODEL` to override) and `gemini
 - Larger, independently written evaluation set with page-level relevance labels, including a held-out set for the thresholds.
 - Test whether weighting dense results higher in fusion fixes the hybrid regression, using questions not used for tuning.
 - Run the critique on degraded answers and measure how often it changes an answer.
-- Per-question latency and token tracking.
+- Repeat the latency run at different times of day to separate agent cost from API variability.
