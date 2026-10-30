@@ -2,7 +2,7 @@ import json, re
 from rank_bm25 import BM25Okapi
 
 chunks = json.load(open("chunks.json"))
-tok = lambda s: re.findall(r"[a-z0-9]+", s.lower())
+tok = lambda s: [w for w in re.findall(r"[a-z0-9]+", s.lower()) if w not in {"the","a","an","of","to","in","is","are","was","what","which","how","does","do","did","and","or","for","on","with","by","at","as","it","its","this","that"}]
 bm25 = BM25Okapi([tok(c["text"]) for c in chunks])
 
 def search_docs(query: str, k: int = 4):
